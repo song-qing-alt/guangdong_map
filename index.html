@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>广东省离线地图系统</title>
+
+  <link rel="stylesheet" href="./lib/leaflet.css">
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: "Microsoft YaHei", Arial, sans-serif;
+      overflow: hidden;
+    }
+
+    #map {
+      width: 100%;
+      height: 100vh;
+      background: #eef3f8;
+    }
+
+    .title-box {
+      position: absolute;
+      top: 15px;
+      left: 60px;
+      z-index: 999;
+      background: #ffffff;
+      padding: 10px 18px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      font-size: 18px;
+      font-weight: bold;
+    }
+
+    .info-box {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      z-index: 999;
+      background: #ffffff;
+      padding: 10px 14px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .legend-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      background: #1677ff;
+      border-radius: 50%;
+      margin-right: 5px;
+    }
+
+    .leaflet-popup-content {
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .popup-title {
+      font-weight: bold;
+      color: #1677ff;
+      font-size: 15px;
+      margin-bottom: 4px;
+    }
+
+    /* 名称不加框，只做白色描边 */
+    .plain-label {
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      white-space: nowrap;
+      font-weight: bold;
+      text-shadow:
+        -1px -1px 0 #ffffff,
+         1px -1px 0 #ffffff,
+        -1px  1px 0 #ffffff,
+         1px  1px 0 #ffffff,
+         0px  0px 3px #ffffff;
+    }
+
+    .city-label {
+      color: #000000;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    .county-label {
+      color: #8a5a00;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .town-label {
+      color: #006655;
+      font-size: 11px;
+      font-weight: bold;
+    }
+
+    .village-label {
+      color: #003a8c;
+      font-size: 10px;
+      font-weight: normal;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="title-box">广东省离线地图系统</div>
+
+  <div class="info-box" id="infoBox">
+    广东省离线地图<br>
+    行政区划分级显示<br>
+    <span class="legend-dot"></span>村 / 居委会定位点
+  </div>
+
+  <div id="map"></div>
+
+  <script src="./lib/leaflet.js"></script>
+
+  <script>
+    /***********************
+     * 1. 基础配置
+     ***********************/
+
+    const MIN_ZOOM = 6;
+    const MAX_ZOOM = 15;
+
+    /*
+      显示规则：
+
+      z6-z7：市级边界 + 市级名称
+      z8-z9：县区边界 + 县区名称
+      z10-z11：镇街边界 + 镇街名称
+      z12-z13：村/居委会边界 + 村/居委会名称
+      z14-z15：蓝色定位点
+
+      注意：
+      z14-z15 不显示村名，只显示蓝色点位，点击点位看名称。
+      这样可以避免最后一级卡顿。
+    */
+
+    const CITY_MIN_ZOOM = 6;
+    const CITY_MAX_ZOOM = 7;
+
+    const COUNTY_MIN_ZOOM = 8;
+    const COUNTY_MAX_ZOOM = 9;
+
+    const TOWN_MIN_ZOOM = 10;
+    const TOWN_MAX_ZOOM = 11;
+
+    const VILLAGE_BOUNDARY_MIN_ZOOM = 12;
+    const VILLAGE_BOUNDARY_MAX_ZOOM = 13;
+
+    const VILLAGE_POINT_MIN_ZOOM = 14;
+
+    const GUANGDONG_CENTER = [23.2, 113.3];
+
+    /***********************
+     * 2. 创建地图
+     ***********************/
+
+    const map = L.map('map', {
+      center: GUANGDONG_CENTER,
+      zoom: 8,
+      minZoom: MIN_ZOOM,
+      maxZoom: MAX_ZOOM,
+      zoomControl: true,
+      preferCanvas: true
+    });
+
+    const canvasRenderer = L.canvas({
+      padding: 0.5
+    });
+
+    /***********************
+     * 3. 加载本地 PNG 离线瓦片
+     ***********************/
+
+    const offlineLayer = L.tileLayer('./tiles/gd/{z}/{x}/{y}.png', {
+      minZoom: MIN_ZOOM,
+      maxZoom: MAX_ZOOM,
+      attribution: '广东省离线瓦片'
+    }).addTo(map);
+
+    /***********************
+     * 4. 城市配置
+     * labelCenter 是市级名称的显示位置
+     ***********************/
+
+    const cityConfigs = [
+      { name: '广州市', key: 'guangzhou', labelCenter: [23.35, 113.35] },
+      { name: '深圳市', key: 'shenzhen', labelCenter: [22.65, 114.05] },
+      { name: '珠海市', key: 'zhuhai', labelCenter: [22.25, 113.45] },
+      { name: '汕头市', key: 'shantou', labelCenter: [23.45, 116.75] },
+      { name: '佛山市', key: 'foshan', labelCenter: [23.15, 112.95] },
+      { name: '韶关市', key: 'shaoguan', labelCenter: [24.75, 113.60] },
+      { name: '河源市', key: 'heyuan', labelCenter: [23.75, 114.70] },
+      { name: '梅州市', key: 'meizhou', labelCenter: [24.35, 116.15] },
+      { name: '惠州市', key: 'huizhou', labelCenter: [23.05, 114.55] },
+      { name: '汕尾市', key: 'shanwei', labelCenter: [22.95, 115.45] },
+      { name: '东莞市', key: 'dongguan', labelCenter: [23.05, 113.75] },
+      { name: '中山市', key: 'zhongshan', labelCenter: [22.55, 113.40] },
+      { name: '江门市', key: 'jiangmen', labelCenter: [22.35, 112.95] },
+      { name: '阳江市', key: 'yangjiang', labelCenter: [21.90, 111.95] },
+      { name: '湛江市', key: 'zhanjiang', labelCenter: [21.25, 110.10] },
+      { name: '茂名市', key: 'maoming', labelCenter: [21.85, 110.95] },
+      { name: '肇庆市', key: 'zhaoqing', labelCenter: [23.25, 112.25] },
+      { name: '清远市', key: 'qingyuan', labelCenter: [23.95, 113.05] },
+      { name: '潮州市', key: 'chaozhou', labelCenter: [23.80, 116.65] },
+      { name: '揭阳市', key: 'jieyang', labelCenter: [23.45, 116.20] },
+      { name: '云浮市', key: 'yunfu', labelCenter: [22.90, 112.00] }
+    ];
+
+    /***********************
+     * 5. 图层组
+     ***********************/
+
+    const provinceLayer = L.geoJSON(null, {
+      style: {
+        color: '#003cff',
+        weight: 3,
+        fillOpacity: 0
+      },
+      onEachFeature: function(feature, layer) {
+        const name = getName(feature);
+        const code = getCode(feature);
+        layer.bindPopup(`<b>${name}</b><br>行政代码：${code}`);
+      }
+    });
+
+    const cityBoundaryLayer = L.layerGroup();
+    const cityLabelLayer = L.layerGroup();
+
+    const countyBoundaryLayer = L.layerGroup();
+    const countyLabelLayer = L.layerGroup();
+
+    const townBoundaryLayer = L.layerGroup();
+    const townLabelLayer = L.layerGroup();
+
+    const villageBoundaryLayer = L.layerGroup();
+    const villageLabelLayer = L.layerGroup();
+
+    const villagePointLayer = L.layerGroup();
+
+    const cityBoundsCache = {};
+
+    const loadedCityBoundary = new Set();
+    const loadedCountyBoundary = new Set();
+    const loadedTownBoundary = new Set();
+    const loadedVillageBoundary = new Set();
+    const loadedVillagePoint = new Set();
+
+    /***********************
+     * 6. 字段兼容函数
+     * 锐多宝字段：
+     * properties["区划名称"]
+     * properties["区划代码"]
+     ***********************/
+
+    function getName(feature) {
+      const p = feature.properties || {};
+
+      return p["区划名称"] ||
+             p["行政区划名称"] ||
+             p["名称"] ||
+             p["地名"] ||
+             p["市名"] ||
+             p["县名"] ||
+             p["区县名"] ||
+             p["乡镇名"] ||
+             p["街道名"] ||
+             p["村名"] ||
+             p["社区名"] ||
+             p["居委会名"] ||
+             p["村委会名"] ||
+             p["村居名称"] ||
+             p["村居委会名称"] ||
+             p.name ||
+             p.NAME ||
+             p.Name ||
+             p.fullname ||
+             p.full_name ||
+             p.fullName ||
+             p.xzqhmc ||
+             p.XZQHMC ||
+             p.title ||
+             '未命名';
+    }
+
+    function getCode(feature) {
+      const p = feature.properties || {};
+
+      return p["区划代码"] ||
+             p["行政区划代码"] ||
+             p["行政代码"] ||
+             p["代码"] ||
+             p.code ||
+             p.adcode ||
+             p.AD_CODE ||
+             p.xzqhdm ||
+             p.XZQHDM ||
+             p.id ||
+             p.ID ||
+             '无';
+    }
+
+    function safeFetchGeoJSON(url) {
+      return fetch(url).then(res => {
+        if (!res.ok) {
+          throw new Error(url + ' 加载失败');
+        }
+        return res.json();
+      });
+    }
+
+    /***********************
+     * 7. 标签工具函数
+     ***********************/
+
+    function getLayerCenter(layer) {
+      try {
+        return layer.getBounds().getCenter();
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function createTextLabel(latlng, name, className) {
+      return L.marker(latlng, {
+        interactive: false,
+        icon: L.divIcon({
+          className: `plain-label ${className}`,
+          html: name,
+          iconSize: null
+        })
+      });
+    }
+
+    function zoomInRange(zoom, min, max) {
+      return zoom >= min && zoom <= max;
+    }
+
+    /***********************
+     * 8. 加载广东省边界
+     ***********************/
+
+    safeFetchGeoJSON('./data/guangdong_province.geojson')
+      .then(data => {
+        provinceLayer.addData(data);
+        provinceLayer.addTo(map);
+        map.fitBounds(provinceLayer.getBounds());
+      })
+      .catch(err => console.error(err));
+
+    /***********************
+     * 9. 加载市级边界和市名
+     ***********************/
+
+    function loadAllCityBoundaries() {
+      cityConfigs.forEach(city => {
+        if (loadedCityBoundary.has(city.key)) return;
+        loadedCityBoundary.add(city.key);
+
+        const file = `./data/${city.key}_city.geojson`;
+
+        safeFetchGeoJSON(file)
+          .then(data => {
+            const layer = L.geoJSON(data, {
+              renderer: canvasRenderer,
+              style: {
+                color: '#000000',
+                weight: 2.2,
+                fillOpacity: 0
+              },
+              onEachFeature: function(feature, subLayer) {
+                const name = getName(feature) || city.name;
+                const code = getCode(feature);
+
+                subLayer.bindPopup(`<b>${name}</b><br>行政代码：${code}`);
+              }
+            });
+
+            cityBoundsCache[city.key] = layer.getBounds();
+            layer.addTo(cityBoundaryLayer);
+
+            createTextLabel(city.labelCenter, city.name, 'city-label').addTo(cityLabelLayer);
+          })
+          .catch(err => console.warn(err.message));
+      });
+    }
+
+    loadAllCityBoundaries();
+
+    /***********************
+     * 10. 加载县区边界和县区名
+     ***********************/
+
+    function loadCountyBoundary(city) {
+      if (loadedCountyBoundary.has(city.key)) return;
+      loadedCountyBoundary.add(city.key);
+
+      const file = `./data/${city.key}_county.geojson`;
+
+      safeFetchGeoJSON(file)
+        .then(data => {
+          const layer = L.geoJSON(data, {
+            renderer: canvasRenderer,
+            style: {
+              color: '#ffff00',
+              weight: 1.5,
+              fillOpacity: 0
+            },
+            onEachFeature: function(feature, subLayer) {
+              const name = getName(feature);
+              const code = getCode(feature);
+
+              subLayer.bindPopup(`<b>${name}</b><br>行政代码：${code}`);
+
+              const center = getLayerCenter(subLayer);
+              if (center && name !== '未命名') {
+                createTextLabel(center, name, 'county-label').addTo(countyLabelLayer);
+              }
+            }
+          });
+
+          layer.addTo(countyBoundaryLayer);
+        })
+        .catch(err => console.warn(err.message));
+    }
+
+    /***********************
+     * 11. 加载镇街边界和镇街名
+     ***********************/
+
+    function loadTownBoundary(city) {
+      if (loadedTownBoundary.has(city.key)) return;
+      loadedTownBoundary.add(city.key);
+
+      const file = `./data/${city.key}_town.geojson`;
+
+      safeFetchGeoJSON(file)
+        .then(data => {
+          const layer = L.geoJSON(data, {
+            renderer: canvasRenderer,
+            style: {
+              color: '#00ffcc',
+              weight: 1,
+              fillOpacity: 0
+            },
+            onEachFeature: function(feature, subLayer) {
+              const name = getName(feature);
+              const code = getCode(feature);
+
+              subLayer.bindPopup(`<b>${name}</b><br>行政代码：${code}`);
+
+              const center = getLayerCenter(subLayer);
+              if (center && name !== '未命名') {
+                createTextLabel(center, name, 'town-label').addTo(townLabelLayer);
+              }
+            }
+          });
+
+          layer.addTo(townBoundaryLayer);
+        })
+        .catch(err => console.warn(err.message));
+    }
+
+    /***********************
+     * 12. 加载村/居委会边界和村名
+     * z12-z13 显示村界 + 村名
+     ***********************/
+
+    function loadVillageBoundary(city) {
+      if (loadedVillageBoundary.has(city.key)) return;
+      loadedVillageBoundary.add(city.key);
+
+      const file = `./data/${city.key}_village.geojson`;
+
+      safeFetchGeoJSON(file)
+        .then(data => {
+          const layer = L.geoJSON(data, {
+            renderer: canvasRenderer,
+            style: {
+              color: '#ffffff',
+              weight: 0.6,
+              fillOpacity: 0
+            },
+            onEachFeature: function(feature, subLayer) {
+              const name = getName(feature);
+              const code = getCode(feature);
+
+              subLayer.bindPopup(`<b>${name}</b><br>行政代码：${code}`);
+
+              const center = getLayerCenter(subLayer);
+              if (center && name !== '未命名') {
+                createTextLabel(center, name, 'village-label').addTo(villageLabelLayer);
+              }
+            }
+          });
+
+          layer.addTo(villageBoundaryLayer);
+        })
+        .catch(err => console.warn(err.message));
+    }
+
+    /***********************
+     * 13. 加载村/居委会蓝色定位点
+     * z14-z15 显示点位
+     ***********************/
+
+    function loadVillagePoints(city) {
+      if (loadedVillagePoint.has(city.key)) return;
+      loadedVillagePoint.add(city.key);
+
+      const file = `./data/${city.key}_village_point.geojson`;
+
+      safeFetchGeoJSON(file)
+        .then(data => {
+          const layer = L.geoJSON(data, {
+            pointToLayer: function(feature, latlng) {
+              return L.circleMarker(latlng, {
+                renderer: canvasRenderer,
+                radius: 3,
+                color: '#0052d9',
+                fillColor: '#1677ff',
+                fillOpacity: 0.85,
+                weight: 1
+              });
+            },
+            onEachFeature: function(feature, subLayer) {
+              const name = getName(feature);
+              const code = getCode(feature);
+
+              subLayer.bindPopup(`
+                <div class="popup-title">${name}</div>
+                <div>行政代码：${code}</div>
+                <div>所属城市：${city.name}</div>
+              `);
+            }
+          });
+
+          layer.addTo(villagePointLayer);
+        })
+        .catch(err => console.warn(err.message));
+    }
+
+    /***********************
+     * 14. 根据缩放级别显示 / 隐藏图层
+     ***********************/
+
+    function setLayerVisible(layer, visible) {
+      if (visible) {
+        if (!map.hasLayer(layer)) layer.addTo(map);
+      } else {
+        if (map.hasLayer(layer)) map.removeLayer(layer);
+      }
+    }
+
+    function updateLayerVisibility() {
+      const zoom = map.getZoom();
+
+      const showCity = zoomInRange(zoom, CITY_MIN_ZOOM, CITY_MAX_ZOOM);
+      const showCounty = zoomInRange(zoom, COUNTY_MIN_ZOOM, COUNTY_MAX_ZOOM);
+      const showTown = zoomInRange(zoom, TOWN_MIN_ZOOM, TOWN_MAX_ZOOM);
+      const showVillageBoundary = zoomInRange(zoom, VILLAGE_BOUNDARY_MIN_ZOOM, VILLAGE_BOUNDARY_MAX_ZOOM);
+      const showVillagePoint = zoom >= VILLAGE_POINT_MIN_ZOOM;
+
+      setLayerVisible(cityBoundaryLayer, showCity);
+      setLayerVisible(cityLabelLayer, showCity);
+
+      setLayerVisible(countyBoundaryLayer, showCounty);
+      setLayerVisible(countyLabelLayer, showCounty);
+
+      setLayerVisible(townBoundaryLayer, showTown);
+      setLayerVisible(townLabelLayer, showTown);
+
+      setLayerVisible(villageBoundaryLayer, showVillageBoundary);
+      setLayerVisible(villageLabelLayer, showVillageBoundary);
+
+      setLayerVisible(villagePointLayer, showVillagePoint);
+
+      updateInfoBox();
+    }
+
+    /***********************
+     * 15. 根据当前视野动态加载数据
+     ***********************/
+
+    function loadVisibleData() {
+      const zoom = map.getZoom();
+      const bounds = map.getBounds();
+
+      cityConfigs.forEach(city => {
+        const cityBounds = cityBoundsCache[city.key];
+
+        if (!cityBounds) return;
+        if (!bounds.intersects(cityBounds)) return;
+
+        if (zoom >= COUNTY_MIN_ZOOM) {
+          loadCountyBoundary(city);
+        }
+
+        if (zoom >= TOWN_MIN_ZOOM) {
+          loadTownBoundary(city);
+        }
+
+        if (zoom >= VILLAGE_BOUNDARY_MIN_ZOOM && zoom <= VILLAGE_BOUNDARY_MAX_ZOOM) {
+          loadVillageBoundary(city);
+        }
+
+        if (zoom >= VILLAGE_POINT_MIN_ZOOM) {
+          loadVillagePoints(city);
+        }
+      });
+
+      updateLayerVisibility();
+    }
+
+    /***********************
+     * 16. 图层控制
+     ***********************/
+
+    L.control.layers(
+      {
+        "广东省离线底图": offlineLayer
+      },
+      {
+        "广东省边界": provinceLayer,
+        "市级边界": cityBoundaryLayer,
+        "市级名称": cityLabelLayer,
+        "县区边界": countyBoundaryLayer,
+        "县区名称": countyLabelLayer,
+        "镇街边界": townBoundaryLayer,
+        "镇街名称": townLabelLayer,
+        "村/居委会边界": villageBoundaryLayer,
+        "村/居委会名称": villageLabelLayer,
+        "蓝色定位图标": villagePointLayer
+      },
+      {
+        collapsed: false
+      }
+    ).addTo(map);
+
+    /***********************
+     * 17. 信息框
+     ***********************/
+
+    function updateInfoBox() {
+      const zoom = map.getZoom();
+
+      let currentLevel = '无';
+      if (zoomInRange(zoom, CITY_MIN_ZOOM, CITY_MAX_ZOOM)) currentLevel = '市级';
+      if (zoomInRange(zoom, COUNTY_MIN_ZOOM, COUNTY_MAX_ZOOM)) currentLevel = '县区级';
+      if (zoomInRange(zoom, TOWN_MIN_ZOOM, TOWN_MAX_ZOOM)) currentLevel = '镇街级';
+      if (zoomInRange(zoom, VILLAGE_BOUNDARY_MIN_ZOOM, VILLAGE_BOUNDARY_MAX_ZOOM)) currentLevel = '村/居委会边界 + 名称';
+      if (zoom >= VILLAGE_POINT_MIN_ZOOM) currentLevel = '村/居委会定位点';
+
+      document.getElementById('infoBox').innerHTML = `
+        当前瓦片级别：${MIN_ZOOM}–${MAX_ZOOM}<br>
+        当前缩放级别：${zoom}<br>
+        当前显示层级：${currentLevel}<br>
+        z6–z7：市级<br>
+        z8–z9：县区级<br>
+        z10–z11：镇街级<br>
+        z12–z13：村/居委会边界 + 名称<br>
+        z14–z15：蓝色定位点<br>
+        <span class="legend-dot"></span>村 / 居委会定位点
+      `;
+    }
+
+    /***********************
+     * 18. 事件监听
+     ***********************/
+
+    map.on('zoomend', function() {
+      updateLayerVisibility();
+      loadVisibleData();
+    });
+
+    map.on('moveend', function() {
+      loadVisibleData();
+    });
+
+    updateLayerVisibility();
+
+    console.log('广东省离线地图系统启动完成');
+  </script>
+</body>
+</html>
